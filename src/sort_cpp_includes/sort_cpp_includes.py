@@ -137,43 +137,29 @@ HEADERS_C = [
     'stdatomic.h',
     'stdnoreturn.h',
     'threads.h',
-    'uchar.h',
-    #
-    # POSIX
-    #
+    'uchar.h'
+]
+
+HEADERS_POSIX = [
     'aio.h',
     'libgen.h',
     'spawn.h',
     'sys/time.h',
     'arpa/inet.h',
-    'limits.h',
-    'stdarg.h',
     'sys/times.h',
-    'assert.h',
-    'locale.h',
-    'stdbool.h',
     'sys/types.h',
-    'complex.h',
-    'math.h',
-    'stddef.h',
     'sys/uio.h',
     'cpio.h',
     'monetary.h',
-    'stdint.h',
     'sys/un.h',
-    'ctype.h',
     'mqueue.h',
-    'stdio.h',
     'sys/utsname.h',
     'dirent.h',
     'ndbm.h',
-    'stdlib.h',
     'sys/wait.h',
     'dlfcn.h',
     'net/if.h',
-    'string.h',
     'syslog.h',
-    'errno.h',
     'netdb.h',
     'strings.h',
     'tar.h',
@@ -181,15 +167,10 @@ HEADERS_C = [
     'netinet/in.h',
     'stropts.h',
     'termios.h',
-    'fenv.h',
     'netinet/tcp.h',
     'sys/ipc.h',
-    'tgmath.h',
-    'float.h',
     'nl_types.h',
     'sys/mman.h',
-    'time.h',
-    'fmtmsg.h',
     'poll.h',
     'sys/msg.h',
     'trace.h',
@@ -212,13 +193,8 @@ HEADERS_C = [
     'iconv.h',
     'search.h',
     'sys/socket.h',
-    'wchar.h',
-    'inttypes.h',
     'semaphore.h',
     'sys/stat.h',
-    'wctype.h',
-    'iso646.h',
-    'setjmp.h',
     'sys/statvfs.h',
     'wordexp.h',
     'langinfo.h',
@@ -287,6 +263,7 @@ HEADERS_CXX = [
     'functional',
     'new',
     'string_view',
+    'format',
     #
     # C compatible headers in C++
     #
@@ -408,6 +385,7 @@ def select_pair_header(
 def sort_includes(
         includes: typing.List[Include], my_filename: str, config: 'Config',
 ) -> typing.List[typing.List[str]]:
+    
     res: typing.List[typing.List[str]] = [[] for _ in config.rules]
 
     if config.has_pair_header:
@@ -417,6 +395,7 @@ def sort_includes(
         line = inc.include_line
 
         match = None
+        
         for i, matchers in enumerate(config.rules):
             match = None
             for matcher in matchers:
@@ -432,6 +411,11 @@ def sort_includes(
                     break
             if match:
                 # print(f'write {line}')
+                quote = config.rule_quotes[i]
+                if quote:
+                    current_quote = get_include_quote_style(line)
+                    if current_quote != quote:
+                        line = replace_include_quotes(line, quote)
                 res[i].append(line)
                 break
 
@@ -440,7 +424,8 @@ def sort_includes(
     # print(res)
 
     for group in res:
-        group.sort(key=lambda x: (not x.endswith('.h>'), x))
+        group.sort(key=lambda line: (get_include_quote_style(line), extract_file_relpath(line)))
+
     return res
 
 
@@ -553,6 +538,26 @@ def include_realpath(
         f'broken compile_commands.json?',
     )
 
+def get_include_quote_style(line: str) -> str:
+    if '<' in line and '>' in line:
+        return 'angle'
+    elif '"' in line:
+        return 'quote'
+    else:
+        raise ValueError(f'Unknown quote style in line: {line}')
+
+def replace_include_quotes(line: str, quote: str) -> str:
+    match = re.match(r'^\s*#include\s*([<"])([^>"]+)[>"]', line)
+    if not match:
+        return line  # невалидный #include — возвращаем как есть
+
+    filename = match.group(2)
+    if quote == 'angle':
+        return f'#include <{filename}>'
+    elif quote == 'quote':
+        return f'#include "{filename}"'
+    else:
+        raise ValueError(f'Invalid quote specifier: {quote}')
 
 class Config:
     def __init__(self, contents: dict):
@@ -573,6 +578,8 @@ class Config:
                         out.append(MatcherPairHeader())
                     elif vname == '@std-cpp':
                         out.append(MatcherHardcoded(HEADERS_CXX))
+                    elif vname == '@posix':
+                        out.append(MatcherHardcoded(HEADERS_POSIX))
                     else:
                         raise Exception(f'Unknown "virtual: {vname}')
                 else:
@@ -581,6 +588,7 @@ class Config:
 
         self.rules = result
         self._has_pair_header = has_pair_header
+        self.rule_quotes = [rules.get("quote") for rules in rules_matrix]
 
     def has_pair_header(self) -> bool:
         return self._has_pair_header
@@ -635,36 +643,38 @@ def do_handle_single_file(
 
     assert orig_file_contents
 
-    i = -1  # for pylint
     has_pragma_once = False
     includes = []
-    for i, line in enumerate(orig_file_contents):
-        line = line.strip()
+    includes_end_line = len(orig_file_contents)
 
-        if is_pragma_once(line):
+    for i, line in enumerate(orig_file_contents):
+        stripped = line.strip()
+
+        if is_pragma_once(stripped):
             has_pragma_once = True
             continue
 
-        if not is_include_or_empty(line):
+        if not is_include_or_empty(stripped):
+            includes_end_line = i
             break
 
-        if not line.strip():
+        if not stripped:
             continue
+
         abs_include = include_realpath_cached(
             filename,
             filename_for_cc, line, compile_commands, realpath_cache,
         )
-
         orig_path = extract_file_relpath(line)
         includes.append(
             Include(
-                include_line=line, orig_path=orig_path, real_path=abs_include,
+                include_line=line,
+                orig_path=orig_path,
+                real_path=abs_include,
             ),
         )
         if abs_include not in include_map.data:
             include_map.data[abs_include] = filename
-
-    assert i != -1
 
     sorted_includes = sort_includes(includes, filename, config)
 
@@ -674,7 +684,7 @@ def do_handle_single_file(
             ofile.write('#pragma once\n\n')
         write_includes(sorted_includes, ofile)
 
-        for line in orig_file_contents[i + 1 :]:
+        for line in orig_file_contents[includes_end_line:]:
             ofile.write(line)
             ofile.write('\n')
     os.rename(src=tmp_filename, dst=filename)
@@ -740,16 +750,17 @@ def main():
             'Path to sort. Can be a file or a directory. If it is '
             'a directory, recursively traverse it. Can be used multiple times.'
         ),
+        default=["."]
     )
     parser.add_argument(
         '--compile-commands',
         '-c',
         type=str,
-        default='compile_commands.json',
+        default='build_debug/compile_commands.json',
         help='Path to "compile_commands.json" file.',
     )
     parser.add_argument(
-        '--config', '-d', type=str, help='Path to config file.',
+        '--config', '-d', type=str, help='Path to config file.', default="/usr/local/bin/.sort-cpp-includes"
     )
     parser.add_argument(
         '--hpp-suffixes', '-p', type=str, default='.hpp,.h', help='TODO',
@@ -776,14 +787,15 @@ def process(args):
     config = read_config(args.config)
     include_map = IncludeMap(data={})
 
-    headers = collect_all_files(args.paths, suffixes + hpp_suffixes)
+    files = collect_all_files(args.paths, suffixes + hpp_suffixes)
+    print(f'files: {files}\n')
 
     # process .cpp
-    for hdr in headers:
-        if has_suffix(hdr, suffixes):
+    for file in files:
+        if has_suffix(file, suffixes):
             handle_single_file(
-                hdr,
-                hdr,
+                file,
+                file,
                 compile_commands,
                 args,
                 realpath_cache,
@@ -792,16 +804,16 @@ def process(args):
             )
 
     # process .hpp
-    for hdr in headers:
-        if has_suffix(hdr, hpp_suffixes):
-            abs_path = os.path.abspath(hdr)
+    for file in files:
+        if has_suffix(file, hpp_suffixes):
+            abs_path = os.path.abspath(file)
             init_cpp = include_map.data.get(abs_path)
             if not init_cpp:
-                print(f'Error: no .cpp file includes "{hdr}"')
+                print(f'Error: no .cpp file includes "{file}"')
                 continue
 
             handle_single_file(
-                hdr,
+                file,
                 init_cpp,
                 compile_commands,
                 args,

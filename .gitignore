@@ -1,5 +1,12 @@
-tags
-*.pyc
-.mypy_cache/
-dist/
+
 *.egg-info
+*.pyc
+
+.mypy_cache/
+
+build
+dist
+export*
+tags
+
+

@@ -16,7 +16,7 @@ class FakeArgs:
 
 
 # TODO: ad-hoc
-COMPILER = '/usr/bin/clang++-9'
+COMPILER = '/usr/bin/clang++'
 
 
 def compose_compile_commands(args):
@@ -58,7 +58,9 @@ def check(tmp_path):
 
         with open(input_fname, 'r') as ifile:
             contents = ifile.read()
-
+        print("======\n")
+        print(f"{contents}")
+        print("======\n")
         # print(contents)
         # print(expected_output)
         assert contents.strip() == expected_output.strip()
@@ -122,4 +124,67 @@ def test_multiple_groups(tmp_path, check):
                     },
                 ],
             }
+    check(input_cpp, expected_output, rules)
+
+def test_quote_conversion(tmp_path, check):
+    input_cpp = '''
+#include "unistd.h"
+#include "stdio.h"
+#include <vector>
+#include <iostream>
+'''
+
+    expected_output = '''
+#include <unistd.h>
+
+#include <stdio.h>
+
+#include "iostream"
+#include "vector"
+'''
+
+    rules = {
+        'rules': [
+            {
+                'matchers': [{'virtual': '@posix'}],
+                'quote': 'angle'
+            },
+            {
+                'matchers': [{'virtual': '@std-c'}],
+                'quote': 'angle'
+            },
+            {
+                'matchers': [{'virtual': '@std-cpp'}],
+                'quote': 'quote'
+            },
+        ]
+    }
+
+    check(input_cpp, expected_output, rules)
+
+def test_include_eats_first_code_line(tmp_path, check):
+    input_cpp = """
+#include <iostream>
+#include <vector>
+
+int main() {
+    return 42;
+}
+"""
+
+    expected_output = """
+#include <iostream>
+#include <vector>
+
+int main() {
+    return 42;
+}
+"""
+
+    rules = {
+        'rules': [
+            {'matchers': [{'regex': '.*'}]},
+        ]
+    }
+
     check(input_cpp, expected_output, rules)
